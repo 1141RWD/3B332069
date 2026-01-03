@@ -156,7 +156,7 @@ const HEROES = [
       return Math.max(1, baseCost - 1);
     },
     onUpgrade(ctx){
-      ctx.turnFlags.freeRefreshUsed = false; // 再給一次免費刷新
+      ctx.turnFlags.freeRefreshUsed = false;
     }
   },
   {
@@ -206,16 +206,7 @@ function winReward(){
   return base + streakBonus;
 }
 function getCtx(){
-  return {
-    gold,
-    turn,
-    tavernTier,
-    winStreak,
-    bag,
-    board,
-    shop,
-    turnFlags
-  };
+  return { gold, turn, tavernTier, winStreak, bag, board, shop, turnFlags };
 }
 function getUpgradeCost(){
   if(tavernTier >= MAX_TAVERN) return 0;
@@ -238,6 +229,283 @@ function tierGlowClass(t){
 }
 function normalizeName(n){ return (n||"").replace(/^★/, "").replace(/^敵·/, ""); }
 
+/* =========================================================
+   ✅ 新手引導（箭頭 + 手指 + 教學卡自動貼近目標）
+   ========================================================= */
+const GUIDE_STEPS = [
+  {
+    targetId: "heroPanel",
+    title: "👋 歡迎來到英雄戰場",
+    body: `你會用金幣在「酒館」買卡，放進「背包」，再上場到「戰場」打架。<br><br>
+          每回合結束會自動戰鬥（模擬），你的卡不會消失。`,
+    hint: "先看英雄面板：HP、金幣、旅店等級、回合。"
+  },
+  {
+    targetId: "shopPanel",
+    title: "🛒 酒館：買卡的地方",
+    body: `點酒館的卡牌就會「購買」。<br><br>買到的卡會先進背包。`,
+    hint: "先找同名卡，等等可以三合一。"
+  },
+  {
+    targetId: "bagPanel",
+    title: "🎒 背包：你的卡牌庫",
+    body: `背包卡：<br>
+          • 左鍵：上場到戰場<br>
+          • 右鍵：賣掉 +1 金`,
+    hint: "三合一會把金卡放回背包。"
+  },
+  {
+    targetId: "boardPanel",
+    title: "🧍 戰場：最多 7 張",
+    body: `戰場卡：<br>
+          • 左鍵：下場回背包<br>
+          • 右鍵：賣掉 +1 金`,
+    hint: "磁力卡會貼到「戰場第一個機械」。"
+  },
+  {
+    targetId: "refreshBtn",
+    title: "🔄 刷新 / 🧊 凍結",
+    body: `刷新：花金幣重抽酒館。<br>凍結：保留酒館卡到下回合。`,
+    hint: "某些英雄每回合第一次刷新可能免費。"
+  },
+  {
+    targetId: "battleBtn",
+    title: "⚔️ 結束回合並戰鬥",
+    body: `按下去就會進入戰鬥動畫。<br><br>輸了會扣 HP，HP 歸零會強制重開。`,
+    hint: "看右上「對手預覽」，回合越高敵人越強。"
+  }
+];
+
+let guideIndex = 0;
+let guideActive = false;
+let guideRAF = 0;
+
+function clearSpotlight(){
+  document.querySelectorAll(".spotlightTarget").forEach(el => el.classList.remove("spotlightTarget"));
+}
+
+function spotlightTargetById(targetId){
+  clearSpotlight();
+  if(!targetId) return null;
+  const el = document.getElementById(targetId);
+  if(!el) return null;
+  el.classList.add("spotlightTarget");
+  try{ el.scrollIntoView({ behavior:"smooth", block:"center" }); }catch(_){}
+  return el;
+}
+
+/* ✅ 把 guideCard 貼近目標（上下左右自動挑最不擋的位置） */
+function positionGuideCardNearTarget(targetEl){
+  const card = document.getElementById("guideCard");
+  if(!card || !targetEl) return;
+
+  // reset: 先放到螢幕底部中央（fallback）
+  card.style.position = "fixed";
+  card.style.left = "50%";
+  card.style.bottom = "16px";
+  card.style.top = "auto";
+  card.style.transform = "translateX(-50%)";
+  card.style.margin = "0";
+
+  const r = targetEl.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // 卡片大小（先取目前尺寸）
+  const c = card.getBoundingClientRect();
+  const cw = c.width;
+  const ch = c.height;
+
+  const pad = 14;           // 邊界保留
+  const gap = 14;           // 目標和卡片間距
+  const candidates = [];
+
+  // 上方
+  candidates.push({
+    name:"top",
+    x: clamp(r.left + r.width/2 - cw/2, pad, vw - pad - cw),
+    y: r.top - gap - ch
+  });
+  // 下方
+  candidates.push({
+    name:"bottom",
+    x: clamp(r.left + r.width/2 - cw/2, pad, vw - pad - cw),
+    y: r.bottom + gap
+  });
+  // 左側
+  candidates.push({
+    name:"left",
+    x: r.left - gap - cw,
+    y: clamp(r.top + r.height/2 - ch/2, pad, vh - pad - ch)
+  });
+  // 右側
+  candidates.push({
+    name:"right",
+    x: r.right + gap,
+    y: clamp(r.top + r.height/2 - ch/2, pad, vh - pad - ch)
+  });
+
+  // 選一個「完全在螢幕內」且「離中心較近」的
+  const centerX = vw/2, centerY = vh*0.72;
+  const ok = candidates
+    .map(p => ({
+      ...p,
+      inside: (p.x >= pad && p.y >= pad && p.x+cw <= vw-pad && p.y+ch <= vh-pad),
+      dist: Math.hypot((p.x+cw/2)-centerX, (p.y+ch/2)-centerY)
+    }))
+    .sort((a,b)=>{
+      // inside 優先，其次距離
+      if(a.inside !== b.inside) return a.inside ? -1 : 1;
+      return a.dist - b.dist;
+    })[0];
+
+  if(ok){
+    card.style.left = `${ok.x}px`;
+    card.style.top  = `${Math.max(pad, ok.y)}px`;
+    card.style.bottom = "auto";
+    card.style.transform = "none";
+  }
+}
+
+/* ✅ 箭頭+手指：指向目標（箭頭旋轉、手指在目標附近點點點） */
+function positionPointerToTarget(targetEl){
+  const arrow = document.getElementById("guideArrow");
+  const hand  = document.getElementById("guideHand");
+  if(!arrow || !hand || !targetEl) return;
+
+  const r = targetEl.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+
+  // 目標點（指到中心偏上，避免擋按鈕）
+  const tx = r.left + r.width * 0.55;
+  const ty = r.top  + r.height * 0.35;
+
+  // 手指位置：放在目標外側一點點（右下角偏移）
+  const handX = clamp(r.right - 10, 10, vw - 66);
+  const handY = clamp(r.bottom - 10, 10, vh - 66);
+
+  hand.style.left = `${handX}px`;
+  hand.style.top  = `${handY}px`;
+
+  // 箭頭起點：從教學卡附近拉過來更像真的
+  const card = document.getElementById("guideCard");
+  const c = card.getBoundingClientRect();
+  const sx = c.left + c.width * 0.15;
+  const sy = c.top  + c.height * 0.45;
+
+  // 箭頭位置：放在起點，然後旋轉指向目標
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+
+  const len = clamp(Math.hypot(dx,dy), 120, 260);
+
+  arrow.style.width = `${len}px`;
+  arrow.style.left  = `${sx}px`;
+  arrow.style.top   = `${sy}px`;
+  arrow.style.transform = `rotate(${ang}deg)`;
+}
+
+/* 每一幀更新（滾動/縮放也跟著走） */
+function guideTick(){
+  if(!guideActive){
+    cancelAnimationFrame(guideRAF);
+    guideRAF = 0;
+    return;
+  }
+
+  const step = GUIDE_STEPS[guideIndex];
+  const targetEl = document.getElementById(step.targetId);
+  if(targetEl){
+    positionGuideCardNearTarget(targetEl);
+    positionPointerToTarget(targetEl);
+  }
+  guideRAF = requestAnimationFrame(guideTick);
+}
+
+function guideShow(idx){
+  if(idx < 0) idx = 0;
+  if(idx >= GUIDE_STEPS.length) idx = GUIDE_STEPS.length - 1;
+
+  guideIndex = idx;
+  guideActive = true;
+
+  const step = GUIDE_STEPS[guideIndex];
+
+  const overlay = document.getElementById("guideOverlay");
+  const titleEl = document.getElementById("guideTitle");
+  const bodyEl  = document.getElementById("guideBody");
+  const pillEl  = document.getElementById("guideStepPill");
+  const hintEl  = document.getElementById("guideHint");
+
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+
+  titleEl.textContent = step.title;
+  bodyEl.innerHTML = step.body;
+  hintEl.textContent = step.hint || "";
+  pillEl.textContent = `${guideIndex + 1} / ${GUIDE_STEPS.length}`;
+
+  const prevBtn = document.getElementById("guidePrevBtn");
+  const nextBtn = document.getElementById("guideNextBtn");
+  prevBtn.disabled = guideIndex === 0;
+  nextBtn.textContent = (guideIndex === GUIDE_STEPS.length - 1) ? "完成 ✅" : "下一步 ➡️";
+
+  // 高亮 + 捲動
+  const targetEl = spotlightTargetById(step.targetId);
+
+  // 讓布局先穩定一下再定位（避免 scrollIntoView/重排導致位置跳）
+  setTimeout(()=>{
+    if(targetEl){
+      positionGuideCardNearTarget(targetEl);
+      positionPointerToTarget(targetEl);
+    }
+  }, 80);
+
+  if(!guideRAF) guideRAF = requestAnimationFrame(guideTick);
+}
+
+function guideStart(){
+  guideShow(0);
+  window.addEventListener("keydown", guideKeyHandler, { passive:true });
+}
+function guideEnd(){
+  guideActive = false;
+  const overlay = document.getElementById("guideOverlay");
+  overlay.classList.remove("show");
+  overlay.setAttribute("aria-hidden", "true");
+  clearSpotlight();
+  window.removeEventListener("keydown", guideKeyHandler);
+
+  if(guideRAF){
+    cancelAnimationFrame(guideRAF);
+    guideRAF = 0;
+  }
+}
+function guideNext(){
+  if(!guideActive) return;
+  if(guideIndex >= GUIDE_STEPS.length - 1){
+    guideEnd();
+    return;
+  }
+  guideShow(guideIndex + 1);
+}
+function guidePrev(){
+  if(!guideActive) return;
+  guideShow(guideIndex - 1);
+}
+function guideSkip(){ guideEnd(); }
+
+function guideKeyHandler(e){
+  if(!guideActive) return;
+  if(e.key === "Escape"){ guideSkip(); }
+  if(e.key === "ArrowRight" || e.key === "Enter"){ guideNext(); }
+  if(e.key === "ArrowLeft"){ guidePrev(); }
+}
+
+/* clamp 工具 */
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
 /* =============== 英雄選擇UI（主面板） =============== */
 function buildHeroSelect(){
   const sel = document.getElementById("heroSelect");
@@ -251,7 +519,6 @@ function buildHeroSelect(){
   sel.value = HEROES[0].id;
 }
 function applyHeroSelection(){
-  // ✅ 選完就不能改（主面板這顆只是保險）
   if(heroLocked) return;
   const sel = document.getElementById("heroSelect");
   heroId = sel.value;
@@ -290,7 +557,6 @@ function confirmHeroPick(){
   hero = HEROES.find(x=>x.id===heroId);
   heroLocked = true;
 
-  // 同步主面板並鎖死
   const mainSel = document.getElementById("heroSelect");
   const applyBtn = document.getElementById("applyHeroBtn");
   if(mainSel){
@@ -299,7 +565,6 @@ function confirmHeroPick(){
   }
   if(applyBtn) applyBtn.disabled = true;
 
-  // 關閉遮罩，正式開始
   document.getElementById("heroPickOverlay").classList.remove("show");
   startGameAfterHeroPick();
 }
@@ -322,7 +587,6 @@ function merge3(list){
   boardIdxs.forEach(i=>board.splice(i,1));
 
   if(hero?.onTriple) hero.onTriple(merged, getCtx());
-
   bag.push(merged);
 }
 
@@ -351,13 +615,14 @@ function checkTriplesAll(){
   }
 }
 
-/* =============== 重開 =============== */
+/* =============== 重開（強制回到選職業） =============== */
 function restartGame(){
   closeOverlay();
+  guideEnd();
   heroLocked = false;
   heroId = null;
   hero = null;
-  initGame(); // 回到「選職業」畫面
+  initGame();
 }
 
 /* =============== 酒館/凍結 =============== */
@@ -365,7 +630,7 @@ function toggleFreeze(){ if(!gameOver){ frozen = !frozen; render(); } }
 
 function refreshShop(free=false, force=false){
   if(gameOver) return;
-  if(!hero) return; // 沒選職業不能開始
+  if(!hero) return;
   if(frozen && !force){ render(); return; }
 
   const ctx = getCtx();
@@ -414,7 +679,7 @@ function applyMagneticToBoard(m){
 
 function buy(i){
   if(gameOver) return;
-  if(!hero) return; // 沒選職業不能買
+  if(!hero) return;
   const m = shop[i];
   const cost = getBuyCost(m);
   if(gold < cost) return;
@@ -676,16 +941,12 @@ function checkGameOver(){
   if(hpVal <= 0){
     hpVal = 0;
     gameOver = true;
-
-    // ✅ 強制重開：短暫停留一下（讓戰鬥動畫/結果有時間收尾）
-    setTimeout(()=>{
-      restartGame(); // 會回到「選職業」並重新開始
-    }, 700);
+    setTimeout(()=>{ restartGame(); }, 700);
   }
 }
 
 function onTurnStart(){
-  turnFlags = {}; // 每回合重置技能使用狀態
+  turnFlags = {};
   if(hero?.onTurnStart) hero.onTurnStart(getCtx());
 }
 function onTurnEnd(){
@@ -726,11 +987,8 @@ async function endTurnBattle(){
   }
 
   checkGameOver();
-
-  // 下一回合開始
   onTurnStart();
 
-  // 刷新酒館
   if(shop.length === 0) refreshShop(true, true);
   else refreshShop(true, false);
 
@@ -773,13 +1031,10 @@ function showResultOverlay({ outcome, enemyLeft, reward, dmg, title, pill, cls }
   `;
 
   if(gameOver){
-  go.innerHTML = `<span class="loseC" style="font-weight:1000;">💀 HP 歸零！強制重開中…</span>`;
-  btnRow.innerHTML = `
-    <button class="btn btnPrimary" disabled>🔁 重新開始</button>
-  `;
-}
-else{
-    go.textContent = "（點繼續或點背景關閉）";
+    go.innerHTML = `<span class="loseC" style="font-weight:1000;">💀 HP 歸零！強制重開中…</span>`;
+    btnRow.innerHTML = `<button class="btn btnPrimary" disabled>🔁 重新開始</button>`;
+  }else{
+    go.textContent = "（點繼續）";
     btnRow.innerHTML = `<button class="btn btnPrimary" onclick="closeOverlay()">繼續</button>`;
   }
 
@@ -919,15 +1174,16 @@ function startGameAfterHeroPick(){
   onTurnStart();
   refreshShop(true, true);
   render();
+
+  // ✅ 開始就跑超像手遊的教學
+  guideStart();
 }
 
 /* =============== 開場 =============== */
 function initGame(){
-  // 初始化 UI 選單
   buildHeroSelect();
   buildHeroPickSelect();
 
-  // reset 狀態
   hpVal = 30;
   gold = 0;
   turn = 1;
@@ -940,13 +1196,11 @@ function initGame(){
   board = [];
   turnFlags = {};
 
-  // 主面板先不鎖（等選完才鎖）
   const mainSel = document.getElementById("heroSelect");
   const applyBtn = document.getElementById("applyHeroBtn");
   if(mainSel){ mainSel.disabled = false; mainSel.value = HEROES[0].id; }
   if(applyBtn){ applyBtn.disabled = false; }
 
-  // 顯示「選職業」遮罩
   document.getElementById("heroPickOverlay").classList.add("show");
   render();
 }

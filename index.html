@@ -4,7 +4,6 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>進階英雄戰場</title>
-
 <link rel="stylesheet" href="style.css">
 </head>
 
@@ -37,7 +36,7 @@
 <div class="container">
 
   <!-- HERO -->
-  <div class="panel">
+  <div class="panel" id="heroPanel">
     <div class="panelHeader">
       <div class="panelTitle">🧝 英雄面板</div>
       <div class="sub" id="statusText">準備中…</div>
@@ -77,14 +76,19 @@
           <button class="btn btnDanger" id="battleBtn" onclick="endTurnBattle()">⚔️ 結束回合並戰鬥</button>
         </div>
 
-        <div class="smallNote">
+        <div class="smallNote" id="gameInfoBox">
+          ✅ 購買卡牌先進「背包」，點背包卡牌上場；戰場最多 <b>7</b> 張<br>
+          ⭐ 背包+戰場同名卡一起計算三合一（合成後回到背包）<br>
+          ✅ 戰鬥是模擬，你的戰場卡牌不會因戰鬥消失<br>
+          💀 HP 歸零會強制重開
         </div>
+
       </div>
     </div>
   </div>
 
   <!-- ENEMY -->
-  <div class="panel">
+  <div class="panel" id="enemyPanel">
     <div class="panelHeader">
       <div class="panelTitle">👹 對手預覽</div>
       <div class="sub">本回合對戰的敵方（回合越高越強）</div>
@@ -94,7 +98,7 @@
   </div>
 
   <!-- SHOP -->
-  <div class="panel">
+  <div class="panel" id="shopPanel">
     <div class="panelHeader">
       <div class="panelTitle">🛒 酒館</div>
       <div class="sub">點卡牌購買（技能可能改價格/刷新/加成）</div>
@@ -103,7 +107,7 @@
   </div>
 
   <!-- BAG -->
-  <div class="panel">
+  <div class="panel" id="bagPanel">
     <div class="panelHeader">
       <div class="panelTitle">🎒 背包</div>
       <div class="sub">點卡牌：上場｜右鍵：賣出 +1 金</div>
@@ -112,7 +116,7 @@
   </div>
 
   <!-- BOARD -->
-  <div class="panel">
+  <div class="panel" id="boardPanel">
     <div class="panelHeader">
       <div class="panelTitle">🧍 你的戰場</div>
       <div class="sub">最多 7 張（點卡牌：下場回背包｜右鍵賣出 +1 金）</div>
@@ -140,6 +144,31 @@
     </div>
     <div class="resultBtnRow">
       <button class="btn btnPrimary" onclick="confirmHeroPick()">🚀 開始遊戲</button>
+    </div>
+  </div>
+</div>
+
+<!-- ✅ 遊戲引導（含箭頭/手指層） -->
+<div class="guideOverlay" id="guideOverlay" aria-hidden="true">
+  <!-- 指向用圖層：箭頭 + 手指（絕對定位） -->
+  <div class="guidePointerLayer" id="guidePointerLayer" aria-hidden="true">
+    <div class="guideArrow" id="guideArrow"></div>
+    <div class="guideHand" id="guideHand" title="點這裡！"></div>
+  </div>
+
+  <div class="guideCard" id="guideCard" role="dialog" aria-modal="true">
+    <div class="guideHead">
+      <div class="guideTitle" id="guideTitle">新手引導</div>
+      <div class="guidePill" id="guideStepPill">1 / 6</div>
+    </div>
+
+    <div class="guideBody" id="guideBody">內容</div>
+    <div class="guideHint" id="guideHint">提示</div>
+
+    <div class="guideBtnRow">
+      <button class="btn" onclick="guidePrev()" id="guidePrevBtn">⬅️ 上一步</button>
+      <button class="btn" onclick="guideSkip()">跳過</button>
+      <button class="btn btnPrimary" onclick="guideNext()" id="guideNextBtn">下一步 ➡️</button>
     </div>
   </div>
 </div>
@@ -183,4 +212,3 @@
 <script src="game.js"></script>
 </body>
 </html>
-
