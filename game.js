@@ -290,7 +290,13 @@ function spotlightTargetById(targetId){
   const el = document.getElementById(targetId);
   if(!el) return null;
   el.classList.add("spotlightTarget");
-  try{ el.scrollIntoView({ behavior:"smooth", block:"center" }); }catch(_){}
+  // ❗避免每一步都 scrollIntoView 造成畫面抖動：同一目標只滑一次
+  try{
+    if(!el.dataset.guidedOnce){
+      el.scrollIntoView({ behavior:"smooth", block:"center" });
+      el.dataset.guidedOnce = "1";
+    }
+  }catch(_){ }
   return el;
 }
 
@@ -466,6 +472,8 @@ function guideShow(idx){
 }
 
 function guideStart(){
+  // 每次開啟引導都重置「只滑一次」標記（避免第二次開引導不會自動帶到目標）
+  document.querySelectorAll("[data-guided-once]").forEach(el => el.removeAttribute("data-guided-once"));
   guideShow(0);
   window.addEventListener("keydown", guideKeyHandler, { passive:true });
 }
